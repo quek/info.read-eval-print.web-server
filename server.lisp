@@ -2,6 +2,8 @@
 
 (named-readtables:in-readtable quek:|#"|)
 
+(defparameter *root* "~/")
+
 (defvar *httpd*)
 (defvar *params*)
 
@@ -41,58 +43,6 @@
                           (close client-socket)))))))
     (iolib.multiplex:event-dispatch *httpd*)))
 
-(defun handler (client-socket)
-  (declare #.*optimize*)
-  (let ((buffer (make-array 4096 :element-type '(unsigned-byte 8))))
-    (declare (dynamic-extent buffer))
-    (multiple-value-bind (buffer nbytes) (iolib.sockets:receive-from client-socket :buffer buffer)
-      (declare (type fixnum nbytes))
-      ;; イベントが2回発生し、2回目の receive-from は 0 バイトになる。そういうもの?
-      (when (plusp nbytes)
-          (multiple-value-bind (buffer nbytes) (request buffer nbytes)
-            (iolib.sockets:send-to client-socket buffer :end nbytes))))))
-
-(defun request (buffer nbytes)
-  (declare #.*optimize*
-           (type ubytes buffer))
-  (multiple-value-bind (symbol *params*) (parse-request buffer nbytes)
-    (funcall (symbol-function symbol))))
-
-(defun parse-request (buffer nbytes)
-  (declare #.*optimize*
-           (type ubytes buffer))
-  (let* ((start (position #x20 buffer :end nbytes))
-         (end (position #x20 buffer :start (+ start 2) :end nbytes))
-         (? (position #x3f buffer :start (+ start 2) :end end))
-         (path (babel:octets-to-string buffer
-                                       :encoding :utf-8
-                                       :start (1+ start)
-                                       :end (or ? end)))
-         (params (if ?
-                     (parse-query-string buffer (1+ ?) end)
-                     (make-hash-table :test #'eq)))
-         (symbol-name (prog1 (string-upcase path)
-                        #|(format t "~&~a" path)|#))
-         (symbol (or (find-symbol symbol-name #.*package*)
-                     (prog1 '/404
-                       (format t "~&~a not found." path)))))
-    (values symbol params)))
-
-(defun parse-query-string (buffer start end)
-  (declare #.*optimize*)
-  (declare (type ubytes buffer))
-  (loop with h = (make-hash-table :test #'eq)
-        for key-start = start then (1+ val-end)
-        for key-end = (position #.(char-code #\=) buffer :start key-start :end end)
-        for val-start = (1+ key-end)
-        for val-end = (or (position #.(char-code #\&) buffer :start val-start :end end) end)
-        do (setf (gethash (intern (nstring-upcase (nurl-decode buffer key-start key-end))
-                                  :keyword)
-                          h)
-                 (nurl-decode buffer val-start val-end))
-        if (= val-end end)
-          do (return-from parse-query-string h)))
-
 (alexandria:define-constant +url-decode-table+
     (let ((array (make-array 255 :element-type 'fixnum
                                  :initial-element -1)))
@@ -109,6 +59,7 @@
       array)
   :test #'equalp)
 
+(declaim (inline nurl-decode))
 (defun nurl-decode (buffer start end)
   (declare #.*optimize*
            (type ubytes buffer)
@@ -130,6 +81,77 @@
                  (progn (setf (aref buffer j) code)
                         (incf i))))))
 
+(declaim (inline parse-query-string))
+(defun parse-query-string (buffer start end)
+  (declare #.*optimize*)
+  (declare (type ubytes buffer))
+  (loop with h = (make-hash-table :test #'eq)
+        for key-start = start then (1+ val-end)
+        for key-end = (position #.(char-code #\=) buffer :start key-start :end end)
+        for val-start = (1+ key-end)
+        for val-end = (or (position #.(char-code #\&) buffer :start val-start :end end) end)
+        do (setf (gethash (intern (nstring-upcase (nurl-decode buffer key-start key-end))
+                                  :keyword)
+                          h)
+                 (nurl-decode buffer val-start val-end))
+        if (= val-end end)
+          do (return-from parse-query-string h)))
+
+(declaim (inline parse-request))
+(defun parse-request (buffer nbytes)
+  (declare #.*optimize*
+           (type ubytes buffer))
+  (let* ((start (position #x20 buffer :end nbytes))
+         (end (position #x20 buffer :start (+ start 2) :end nbytes))
+         (? (position #x3f buffer :start (+ start 2) :end end))
+         (path (babel:octets-to-string buffer
+                                       :encoding :utf-8
+                                       :start (1+ start)
+                                       :end (or ? end)))
+         (params (if ?
+                     (parse-query-string buffer (1+ ?) end)
+                     (make-hash-table :test #'eq)))
+         (symbol-name (prog1 (string-upcase path)
+                        #|(format t "~&~a" path)|#))
+         (symbol (or (find-symbol symbol-name #.*package*)
+                     (prog1 '/404
+                       (format t "~&~a not found." path)))))
+    (values symbol params path)))
+
+(declaim (inline send-file))
+(defun send-file (file)
+  (declare #.*optimize*)
+  (let* ((header (the ubytes (babel:string-to-octets #"""HTTP/1.0 200#,+crlf+,Content-Type: text/html; charset=utf-8;#,+crlf+,#,+crlf+"""
+                                                     :encoding :utf-8)))
+         (header-length (length header)))
+    (with-open-file (in file :element-type 'ubyte)
+      (let* ((length (the fixnum (+ (the fixnum (file-length in)) header-length)))
+             (buffer (make-array length :element-type 'ubyte)))
+        (dotimes (i header-length)
+          (setf (aref buffer i) (aref header i)))
+        (read-sequence buffer in :start header-length)
+        (values buffer length)))))
+
+(declaim (inline request))
+(defun request (buffer nbytes)
+  (declare #.*optimize*
+           (type ubytes buffer))
+  (multiple-value-bind (symbol *params* path) (parse-request buffer nbytes)
+    (let ((file (probe-file (concatenate 'string *root* path))))
+      (if file
+          (send-file file)
+          (funcall (symbol-function symbol))))))
+
+(defun handler (client-socket)
+  (declare #.*optimize*)
+  (let ((buffer (make-array 4096 :element-type '(unsigned-byte 8))))
+    (declare (dynamic-extent buffer))
+    (multiple-value-bind (buffer nbytes) (iolib.sockets:receive-from client-socket :buffer buffer)
+      (declare (type fixnum nbytes))
+      ;; イベントが2回発生し、2回目の receive-from は 0 バイトになる。そういうもの?
+      (when (plusp nbytes)
+          (multiple-value-bind (buffer nbytes) (request buffer nbytes)
+            (iolib.sockets:send-to client-socket buffer :end nbytes))))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun make-response (content)
