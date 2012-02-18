@@ -12,8 +12,10 @@
 (deftype ubyte () '(unsigned-byte 8))
 (deftype ubytes () '(simple-array ubyte))
 
-;;; (defparameter *optimize* '(optimize (speed 0) (safety 3) (debug 3) (compilation-speed 0)))
-(defparameter *optimize* '(optimize (speed 3) (safety 0) (debug 0) (compilation-speed 0)))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  ;;; (defparameter *optimize* '(optimize (speed 0) (safety 3) (debug 3) (compilation-speed 0)))
+  (defparameter *optimize* '(optimize (speed 3) (safety 0) (debug 0) (compilation-speed 0))))
 
 (defun start (&key (port 8888))
   (declare #.*optimize*)
