@@ -103,28 +103,34 @@
   "package of handler functions.")
 
 (declaim (inline parse-request))
+(defun find-handler-symbol (path)
+  (declare #.*optimize*)
+  (let ((symbol-name (string-upcase path)))
+    (or (and (string= "/index.html" symbol-name)
+             (find-symbol "ROOT" *handler-package*))
+        (find-symbol symbol-name *handler-package*)
+        (prog1 '/404
+                  (format t "~&~a not found in ~a." path *handler-package*)))))
+
+(declaim (inline parse-request))
 (defun parse-request (buffer nbytes)
   (declare #.*optimize*
            (type ubytes buffer))
   (let* ((start (position #x20 buffer :end nbytes))
          (end (position #x20 buffer :start (+ start 2) :end nbytes))
          (? (position #x3f buffer :start (+ start 2) :end end))
-         (path (babel:octets-to-string buffer
-                                       :encoding :utf-8
-                                       :start (1+ start)
-                                       :end (or ? end)))
+         (path (let ((x (babel:octets-to-string buffer
+                                                :encoding :utf-8
+                                                :start (1+ start)
+                                                :end (or ? end))))
+                 (if (string= "/" x)
+                     "/index.html"
+                     x)))
          (params (if ?
                      (parse-query-string buffer (1+ ?) end)
                      (make-hash-table :test #'eq)))
-         (symbol-name (prog1 (string-upcase path)
-                        #|(format t "~&~a" path)|#))
-         (symbol (or (and (string= "/" symbol-name)
-                          (setf path "/index.html")
-                          (find-symbol "ROOT" *handler-package*))
-                     (find-symbol symbol-name *handler-package*)
-                     (prog1 '/404
-                       (format t "~&~a not found." path)))))
-    (values symbol params path)))
+         (handler-symbol (find-handler-symbol path)))
+    (values handler-symbol params path)))
 
 (declaim (inline send-file))
 (defun send-file (file)
@@ -175,6 +181,11 @@
         `(values ,buffer ,nbytes))
       form))
 
+(defun params (key &optional default)
+  (gethash key *params* default))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; sample pages
 (defun root ()
   (declare #.*optimize*)
   (make-response #"""<html><body><h1>This is root.</h1></body></html>"""))
