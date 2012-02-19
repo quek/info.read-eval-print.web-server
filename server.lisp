@@ -99,6 +99,9 @@
         if (= val-end end)
           do (return-from parse-query-string h)))
 
+(defparameter *handler-package* (find-package :info.read-eval-print.web-server)
+  "package of handler functions.")
+
 (declaim (inline parse-request))
 (defun parse-request (buffer nbytes)
   (declare #.*optimize*
@@ -115,7 +118,10 @@
                      (make-hash-table :test #'eq)))
          (symbol-name (prog1 (string-upcase path)
                         #|(format t "~&~a" path)|#))
-         (symbol (or (find-symbol symbol-name #.*package*)
+         (symbol (or (and (string= "/" symbol-name)
+                          (setf path "/index.html")
+                          (find-symbol "ROOT" *handler-package*))
+                     (find-symbol symbol-name *handler-package*)
                      (prog1 '/404
                        (format t "~&~a not found." path)))))
     (values symbol params path)))
@@ -168,6 +174,10 @@
       (multiple-value-bind (buffer nbytes) (make-response content)
         `(values ,buffer ,nbytes))
       form))
+
+(defun root ()
+  (declare #.*optimize*)
+  (make-response #"""<html><body><h1>This is root.</h1></body></html>"""))
 
 (defun /hello ()
   (declare #.*optimize*)

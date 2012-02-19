@@ -1,5 +1,7 @@
 ;;;; package.lisp
 
 (quek:sdefpackage :info.read-eval-print.web-server
-                  (:use :cl))
+                  (:use :cl)
+                  (:export #:start)
+                  (:export #:*handler-package*))
 
